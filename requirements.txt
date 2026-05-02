@@ -1,0 +1,6 @@
+streamlit
+pandas
+numpy
+feedparser
+tradingview-screener
+google-generativeai
