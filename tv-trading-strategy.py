@@ -10,7 +10,7 @@ import google.generativeai as genai
 st.set_page_config(page_title="SwingTrade Pro | Institutional Terminal", layout="wide")
 
 # API Configuration
-genai.configure(api_key="AIzaSyBHxaNPPvgPWbu3Kw0Z2rAAMw-fNWdHq7o")
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 ai_model = genai.GenerativeModel('gemini-2.5-flash')
 
 # Custom CSS for Professional Terminal & Table Styling
