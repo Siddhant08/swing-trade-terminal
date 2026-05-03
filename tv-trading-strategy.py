@@ -5,14 +5,14 @@ import feedparser
 from tradingview_screener import Query, col
 import streamlit.components.v1 as components
 import google.generativeai as genai
+import plotly.graph_objects as go
 
-#gemini setup
+
 st.set_page_config(page_title="SwingTrade Pro | Institutional Terminal", layout="wide")
 
-#API config
+#ai config
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 ai_model = genai.GenerativeModel('gemini-2.5-flash')
-
 #custom CSS
 st.markdown("""
     <style>
@@ -67,7 +67,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-#stocks scanner
+#data scanner
 @st.cache_data(ttl=3600)
 def get_market_data():
     try:
@@ -97,7 +97,246 @@ def get_ai_analysis(name, ticker, close, rsi):
     except Exception:
         return "Analyst unavailable."
 
-#risk sidebar
+#decision tree
+def create_plotly_decision_tree():
+    """
+    Builds a fully interactive Plotly decision tree for swing trade entry logic.
+    Layout uses a top-down flow with YES paths going down and NO/Caution
+    branches going to the right.
+    """
+
+    # ── Node registry ──────────────────────────────────────────────────────────
+    # Each entry: id, x, y, label (HTML-ish via <br>), color, text_color
+    nodes = [
+        # ── Row 0 — Start ──────────────────────────────────────────────────────
+        dict(id="start",
+             x=0.40, y=1.00,
+             label="🔍 START<br>Review Tomorrow's Close",
+             color="#2563eb", tc="white"),
+
+        # ── Row 1 — Q1 ─────────────────────────────────────────────────────────
+        dict(id="q1",
+             x=0.40, y=0.85,
+             label="1️⃣ Is Tomorrow's<br>Candle GREEN?",
+             color="#1e40af", tc="white"),
+        dict(id="q1_no",
+             x=0.82, y=0.85,
+             label="❌ AVOID<br>Wait Another Day",
+             color="#dc2626", tc="white"),
+
+        # ── Row 2 — Q2 ─────────────────────────────────────────────────────────
+        dict(id="q2",
+             x=0.40, y=0.70,
+             label="2️⃣ Is RSI > 45<br>& Turning Up?",
+             color="#1e40af", tc="white"),
+        dict(id="q2_no",
+             x=0.82, y=0.70,
+             label="❌ AVOID<br>RSI Too Weak",
+             color="#dc2626", tc="white"),
+
+        # ── Row 3 — Q3 ─────────────────────────────────────────────────────────
+        dict(id="q3",
+             x=0.40, y=0.55,
+             label="3️⃣ Is Price Above<br>MA Ribbon?",
+             color="#1e40af", tc="white"),
+        dict(id="q3_no",
+             x=0.82, y=0.55,
+             label="❌ AVOID<br>Below MA Support",
+             color="#dc2626", tc="white"),
+
+        # ── Row 4 — Q4 ─────────────────────────────────────────────────────────
+        dict(id="q4",
+             x=0.40, y=0.40,
+             label="4️⃣ Is NASDAQ (NDQ)<br>Also Green?",
+             color="#1e40af", tc="white"),
+        dict(id="q4_no",
+             x=0.82, y=0.40,
+             label="⚠️ CAUTION<br>Market Headwind",
+             color="#d97706", tc="white"),
+
+        # ── Row 5 — Q5 ─────────────────────────────────────────────────────────
+        dict(id="q5",
+             x=0.40, y=0.25,
+             label="5️⃣ Any Earnings<br>News Today?",
+             color="#1e40af", tc="white"),
+        dict(id="q5_yes",
+             x=0.82, y=0.25,
+             label="❌ AVOID<br>Earnings Risk",
+             color="#dc2626", tc="white"),
+
+        # ── Row 6 — Q6 ─────────────────────────────────────────────────────────
+        dict(id="q6",
+             x=0.40, y=0.10,
+             label="6️⃣ Is Volume<br>> 2,000,000?",
+             color="#1e40af", tc="white"),
+        dict(id="q6_no",
+             x=0.82, y=0.10,
+             label="⚠️ CAUTION<br>Low Conviction",
+             color="#d97706", tc="white"),
+
+        # ── Final — BUY ────────────────────────────────────────────────────────
+        dict(id="buy",
+             x=0.40, y=-0.07,
+             label="✅ PLACE BUY STOP<br>Entry: 1.002 × High<br>🔴 Stop: -5%  |  🎯 Target: +15%",
+             color="#16a34a", tc="white"),
+    ]
+
+    # ── Edge registry ──────────────────────────────────────────────────────────
+    # Each entry: from_id, to_id, label, label_color
+    edges = [
+        # Main YES flow (vertical)
+        ("start", "q1",     "",         "white"),
+        ("q1",    "q2",     "YES ✅",   "#4ade80"),
+        ("q2",    "q3",     "YES ✅",   "#4ade80"),
+        ("q3",    "q4",     "YES ✅",   "#4ade80"),
+        ("q4",    "q5",     "YES ✅",   "#4ade80"),
+        ("q5",    "q6",     "NO  ✅",   "#4ade80"),   # No earnings = good
+        ("q6",    "buy",    "YES ✅",   "#4ade80"),
+
+        # NO / Caution branches (horizontal)
+        ("q1",    "q1_no",  "NO ❌",    "#f87171"),
+        ("q2",    "q2_no",  "NO ❌",    "#f87171"),
+        ("q3",    "q3_no",  "NO ❌",    "#f87171"),
+        ("q4",    "q4_no",  "NO ⚠️",   "#fbbf24"),
+        ("q5",    "q5_yes", "YES ❌",   "#f87171"),
+        ("q6",    "q6_no",  "NO ⚠️",   "#fbbf24"),
+    ]
+
+    # ── Build lookup: id → (x, y) ──────────────────────────────────────────────
+    pos = {n["id"]: (n["x"], n["y"]) for n in nodes}
+
+    # ── Plotly figure ──────────────────────────────────────────────────────────
+    fig = go.Figure()
+
+    # Draw edges first (so nodes sit on top)
+    for (src, dst, elabel, ecol) in edges:
+        x0, y0 = pos[src]
+        x1, y1 = pos[dst]
+        mx = (x0 + x1) / 2          # midpoint for label
+        my = (y0 + y1) / 2
+
+        # Arrow line
+        fig.add_shape(
+            type="line",
+            x0=x0, y0=y0, x1=x1, y1=y1,
+            line=dict(color="rgba(255,255,255,0.6)", width=1.8),
+            layer="below"
+        )
+
+        # Arrowhead annotation (invisible text, just the arrow)
+        fig.add_annotation(
+            x=x1, y=y1,
+            ax=x0, ay=y0,
+            xref="x", yref="y",
+            axref="x", ayref="y",
+            text="",
+            showarrow=True,
+            arrowhead=3,
+            arrowsize=1.4,
+            arrowwidth=1.8,
+            arrowcolor="rgba(255,255,255,0.7)"
+        )
+
+        # Edge label
+        if elabel:
+            # Offset label slightly so it doesn't sit on the line
+            offset_x = 0.03 if x1 > x0 else -0.03
+            offset_y = 0.015 if y1 == y0 else 0.01
+            fig.add_annotation(
+                x=mx + offset_x,
+                y=my + offset_y,
+                text=f"<b>{elabel}</b>",
+                showarrow=False,
+                font=dict(size=10, color=ecol),
+                bgcolor="rgba(15,23,42,0.75)",
+                borderpad=3,
+                xref="x", yref="y"
+            )
+
+    # Draw node boxes via scatter (marker symbol = square, sized large)
+    for n in nodes:
+        x, y = n["x"], n["y"]
+
+        # Shadow / glow effect
+        fig.add_shape(
+            type="rect",
+            x0=x - 0.175, y0=y - 0.063,
+            x1=x + 0.175, y1=y + 0.063,
+            fillcolor="rgba(0,0,0,0.25)",
+            line=dict(width=0),
+            layer="below"
+        )
+
+        # Main box
+        fig.add_shape(
+            type="rect",
+            x0=x - 0.170, y0=y - 0.058,
+            x1=x + 0.170, y1=y + 0.058,
+            fillcolor=n["color"],
+            line=dict(color="white", width=1.5),
+            layer="above"
+        )
+
+        # Node text
+        fig.add_annotation(
+            x=x, y=y,
+            text=f"<b>{n['label']}</b>",
+            showarrow=False,
+            font=dict(size=11, color=n["tc"], family="Arial"),
+            xref="x", yref="y",
+            align="center"
+        )
+
+    # ── Legend boxes (bottom-left) ─────────────────────────────────────────────
+    legend_items = [
+        ("#16a34a", "✅ Buy Signal"),
+        ("#dc2626", "❌ Avoid — Hard Stop"),
+        ("#d97706", "⚠️ Caution — Use Discretion"),
+        ("#1e40af", "🔵 Decision Checkpoint"),
+        ("#2563eb", "🔍 Start Node"),
+    ]
+    for i, (lc, lt) in enumerate(legend_items):
+        lx = -0.05
+        ly = -0.18 - i * 0.055
+        fig.add_shape(type="rect",
+                      x0=lx, y0=ly - 0.018,
+                      x1=lx + 0.04, y1=ly + 0.018,
+                      fillcolor=lc,
+                      line=dict(color="white", width=1))
+        fig.add_annotation(x=lx + 0.055, y=ly,
+                           text=f"<b>{lt}</b>",
+                           showarrow=False,
+                           font=dict(size=10, color="white"),
+                           xref="x", yref="y",
+                           xanchor="left")
+
+    # ── Layout ─────────────────────────────────────────────────────────────────
+    fig.update_layout(
+        title=dict(
+            text="<b>📊 Swing Trade Entry Decision Tree</b><br>"
+                 "<sup>Follow this checklist at tomorrow's market close</sup>",
+            font=dict(size=18, color="white"),
+            x=0.5, xanchor="center"
+        ),
+        paper_bgcolor="#0f172a",
+        plot_bgcolor="#0f172a",
+        xaxis=dict(
+            visible=False,
+            range=[-0.10, 1.10]
+        ),
+        yaxis=dict(
+            visible=False,
+            range=[-0.50, 1.10]
+        ),
+        height=900,
+        margin=dict(l=20, r=20, t=80, b=20),
+        showlegend=False
+    )
+
+    return fig
+
+
+# --- 4. RISK CONTROL SIDEBAR ---
 with st.sidebar:
     st.header("🛡️ Risk Management")
     capital = st.number_input("Account Balance ($)", value=10000, step=1000)
@@ -105,7 +344,7 @@ with st.sidebar:
     st.divider()
     st.info(f"Risk Amount: ${capital * (risk_pct/100):,.2f}")
 
-#analytics UI
+#main table interface
 st.title("📈 Institutional Swing Terminal")
 df_raw = get_market_data()
 
@@ -141,7 +380,7 @@ if not df_raw.empty:
 
     st.divider()
 
-    #main table
+    #chart and trade plan
     col_chart, col_plan = st.columns([2, 1])
 
     with col_plan:
@@ -177,7 +416,6 @@ if not df_raw.empty:
         """
         components.html(html_code, height=410)
         
-        # --- RESTORED CHECKLIST ---
         st.markdown(f"""
         <div class="checklist-container">
             <h3 style="margin-top:0; color:#1e293b; font-size:1.1rem;">🚀 Pre-Flight Checklist: {selected}</h3>
@@ -209,5 +447,29 @@ if not df_raw.empty:
             with st.spinner("Analyzing 2026 Market Data..."):
                 analysis = get_ai_analysis(row_sel['description'], selected, row_sel['close'], row_sel['RSI'])
                 st.markdown(f"""<div class="ai-insight-box"><b>Quant Intelligence Brief:</b><br>{analysis}</div>""", unsafe_allow_html=True)
+
+    # --- ROW: DECISION TREE ---
+    st.divider()
+    st.subheader("🌳 Swing Trade Entry Decision Tree")
+    st.caption("Follow this decision tree at tomorrow's market close before placing any trade.")
+
+    tree_fig = create_plotly_decision_tree()
+    st.plotly_chart(tree_fig, use_container_width=True)
+
+    # How-to guide below the chart
+    st.markdown("""
+    <div class="checklist-container">
+        <h3 style="margin-top:0; color:#1e293b; font-size:1.1rem;">📖 How To Use This Decision Tree</h3>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; color:#1e293b; font-size:0.95rem;">
+            <div>✅ <b>All 6 checks pass</b> → Place Buy Stop at 1.002 × High</div>
+            <div>❌ <b>Any RED check fails</b> → Do not trade, wait another day</div>
+            <div>⚠️ <b>CAUTION checks</b> → Reduce position size, use discretion</div>
+            <div>📅 <b>When to check</b> → Review every day at market close (4PM ET)</div>
+            <div>📊 <b>RSI Rule</b> → Must be above 45 AND visually turning upward</div>
+            <div>🚫 <b>Earnings Rule</b> → Always avoid trading on earnings days</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
 else:
     st.warning("Scanning for liquidity... no matches found.")
