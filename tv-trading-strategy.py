@@ -6,14 +6,14 @@ from tradingview_screener import Query, col
 import streamlit.components.v1 as components
 import google.generativeai as genai
 
-# --- 1. ARCHITECTURE & AI SETUP ---
+#gemini setup
 st.set_page_config(page_title="SwingTrade Pro | Institutional Terminal", layout="wide")
 
-# API Configuration
+#API config
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 ai_model = genai.GenerativeModel('gemini-2.5-flash')
 
-# Custom CSS for Professional Terminal & Table Styling
+#custom CSS
 st.markdown("""
     <style>
     .stApp { background-color: #f8fafc; }
@@ -67,7 +67,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. DATA ENGINES ---
+#stocks scanner
 @st.cache_data(ttl=3600)
 def get_market_data():
     try:
@@ -97,7 +97,7 @@ def get_ai_analysis(name, ticker, close, rsi):
     except Exception:
         return "Analyst unavailable."
 
-# --- 3. RISK CONTROL SIDEBAR ---
+#risk sidebar
 with st.sidebar:
     st.header("🛡️ Risk Management")
     capital = st.number_input("Account Balance ($)", value=10000, step=1000)
@@ -105,7 +105,7 @@ with st.sidebar:
     st.divider()
     st.info(f"Risk Amount: ${capital * (risk_pct/100):,.2f}")
 
-# --- 4. MAIN ANALYTICS INTERFACE ---
+#analytics UI
 st.title("📈 Institutional Swing Terminal")
 df_raw = get_market_data()
 
@@ -141,7 +141,7 @@ if not df_raw.empty:
 
     st.divider()
 
-    # --- ROW: CHART & TRADE PLAN ---
+    #main table
     col_chart, col_plan = st.columns([2, 1])
 
     with col_plan:
