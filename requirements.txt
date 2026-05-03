@@ -4,3 +4,4 @@ numpy
 feedparser
 tradingview-screener
 google-generativeai
+plotly
